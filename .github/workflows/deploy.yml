@@ -76,11 +76,16 @@ jobs:
       - name: Deploy with SAM
         run: |
           sam deploy \
+            --stack-name task-manager-api \
+            --region us-east-2 \
+            --s3-prefix task-manager-api \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides Environment=dev
 
-      - name: Print deployed API URL
+     - name: Print deployed API URL
         run: |
           aws cloudformation describe-stacks \
             --stack-name task-manager-api \
