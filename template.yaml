@@ -1,0 +1,354 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Task Manager REST API — Spring Boot on AWS Lambda
+
+# ─────────────────────────────────────────────────────────────
+# Global settings applied to ALL Lambda functions in this file
+# ─────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Timeout: 30                         # Max seconds Lambda can run (30s is safe for Spring Boot cold start)
+    MemorySize: 512                     # MB of RAM — higher = faster cold start, costs more
+    Runtime: java17                     # Must match your pom.xml java.version
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        SPRING_PROFILES_ACTIVE: lambda  # Activates application-lambda.properties (created below)
+        TABLE_NAME: !Ref TaskTable      # DynamoDB table name injected at deploy time
+
+# ─────────────────────────────────────────────────────────────
+# Parameters — values you pass in at deploy time
+# Usage: sam deploy --parameter-overrides Environment=prod
+# ─────────────────────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment environment
+
+# ─────────────────────────────────────────────────────────────
+# Resources — everything AWS will create
+# ─────────────────────────────────────────────────────────────
+Resources:
+
+  # ── 1. The Lambda Function ──────────────────────────────────
+  TaskManagerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-${Environment}    # e.g. task-manager-dev
+      Handler: com.taskmanager.task_manager_api.StreamLambdaHandler::handleRequest
+      #         ↑ your handler class          ↑ method Lambdainvokes
+      CodeUri: target/task-manager-1.0.0.jar            # built by: mvn package
+      Description: Task Manager REST API running on Lambda
+      SnapStart:                                         # Reduces cold start from ~8s to ~1s
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:                            # Grants read/write access to DynamoDB
+            TableName: !Ref TaskTable
+      Events:
+        # ── API Gateway routes ── each maps a URL to this Lambda
+        CreateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+        GetAllTasks:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks
+            Method: GET
+            Auth:
+             Authorizer: CognitoAuthorizer
+        GetTaskById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks/{id}
+            Method: GET
+            Auth:
+             Authorizer: CognitoAuthorizer
+        UpdateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks/{id}
+            Method: PUT
+            Auth:
+             Authorizer: CognitoAuthorizer
+        DeleteTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks/{id}
+            Method: DELETE
+            Auth:
+             Authorizer: CognitoAuthorizer
+
+  # ── 2. API Gateway ──────────────────────────────────────────
+  TaskManagerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub task-manager-api-${Environment}
+      StageName: !Ref Environment                       # URL will be: /dev/api/v1/tasks
+      TracingEnabled: true                              # Enables AWS X-Ray tracing
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 50                      # Max concurrent requests
+          ThrottlingRateLimit: 100                      # Requests per second
+          LoggingLevel: INFO                            # Logs to CloudWatch
+          MetricsEnabled: true                          # Enables detailed CloudWatch metrics
+        # ── API Gateway response caching — DISABLED to avoid cost ──
+      # CacheClusterEnabled/CacheClusterSize provision a dedicated cache
+      # cluster that costs ~$0.02/hr (~$13-14/month) even at the smallest
+      # size, REGARDLESS of traffic — unlike everything else in this
+      # template, this isn't covered by AWS's free tier. Left here,
+      # commented out, as a deliberate design decision to document:
+      #
+      # CacheClusterEnabled: true
+      # CacheClusterSize: "0.5"
+      #
+      # and per-method, you would add to the GET /tasks entry above:
+      #   CachingEnabled: true
+      #   CacheTtlInSeconds: 300
+      #
+      # To enable: uncomment both blocks, then `sam deploy`.
+      # To verify cost before enabling: AWS Console → API Gateway →
+      # your API → Stages → dev → check "Cache cluster" cost estimate.
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:                            # Logical name referenced by each Lambda Event below
+            UserPoolArn: !GetAtt TaskManagerUserPool.Arn
+            Identity:
+              Header: Authorization                     # Reads the JWT from this header
+
+  # ── 3. Cognito User Pool ────────────────────────────────────
+  # The "user directory" — stores signed-up users, handles password
+  # policies, email verification, and issues JWT tokens on login.
+  TaskManagerUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub task-manager-users-${Environment}
+      AutoVerifiedAttributes:
+        - email                                         # Sends a verification code to email on signup
+      UsernameAttributes:
+        - email                                         # Users log in WITH their email as username
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+  
+  # ── 4. Cognito App Client ───────────────────────────────────
+  # Represents "this specific application" connecting to the User Pool.
+  # No client secret — appropriate for public clients like curl/Postman/SPAs
+  # testing this project (a real production web app would also commonly
+  # use this same no-secret flow for browser-based apps).
+  TaskManagerUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub task-manager-client-${Environment}
+      UserPoolId: !Ref TaskManagerUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH                      # Enables simple email+password login via CLI
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # ── 6. API Gateway Usage Plan + Key ─────────────────────────
+  # Different from the blanket ThrottlingBurstLimit/RateLimit above —
+  # this lets you issue a NAMED key to a specific consumer (e.g. a
+  # partner, a frontend app) with its OWN quota, separate from others.
+  TaskManagerUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - TaskManagerApiStage
+    Properties:
+      UsagePlanName: !Sub task-manager-usage-plan-${Environment}
+      ApiStages:
+        - ApiId: !Ref TaskManagerApi
+          Stage: !Ref Environment
+      Throttle:
+        BurstLimit: 20                                  # Per-key burst (tighter than the API-wide limit)
+        RateLimit: 50                                   # Per-key sustained requests/sec
+      Quota:
+        Limit: 10000                                    # Max requests
+        Period: MONTH                                   # per calendar month, per key
+ 
+  TaskManagerApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - TaskManagerApiStage
+    Properties:
+      Name: !Sub task-manager-key-${Environment}
+      Enabled: true
+ 
+  TaskManagerUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref TaskManagerApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref TaskManagerUsagePlan
+ 
+  # ── 5. DynamoDB Table ───────────────────────────────────────
+  TaskTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub tasks-${Environment}              # e.g. tasks-dev
+      BillingMode: PAY_PER_REQUEST                      # No capacity planning needed — pay per use
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S                              # S = String
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH                                 # id is the partition key
+  
+   # ── 8. CloudWatch Dashboard ─────────────────────────────────
+  # A visual page combining Lambda + API Gateway metrics in one view.
+  # View it at: CloudWatch console → Dashboards → task-manager-dashboard-{env}
+  TaskManagerDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub task-manager-dashboard-${Environment}
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Invocations & Errors",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${TaskManagerFunction}", {"stat": "Sum"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${TaskManagerFunction}", {"stat": "Sum"}]
+                ],
+                "period": 300,
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Duration (p50 / p95 / p99)",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p50", "label": "p50"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p95", "label": "p95"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p99", "label": "p99"}]
+                ],
+                "period": 300,
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "API Gateway Requests & 4XX/5XX Errors",
+                "metrics": [
+                  ["AWS/ApiGateway", "Count", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}],
+                  ["AWS/ApiGateway", "4XXError", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}],
+                  ["AWS/ApiGateway", "5XXError", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}]
+                ],
+                "period": 300,
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "DynamoDB Read/Write Capacity Consumed",
+                "metrics": [
+                  ["AWS/DynamoDB", "ConsumedReadCapacityUnits", "TableName", "${TaskTable}", {"stat": "Sum"}],
+                  ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "${TaskTable}", {"stat": "Sum"}]
+                ],
+                "period": 300,
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+  # ── 10. CloudWatch Alarm + SNS notification ─────────────────
+  # SNS Topic — the "notification channel" the alarm publishes to.
+  # You subscribe your email to this topic AFTER deploy (SNS doesn't
+  # let you hardcode an email in the template for security reasons —
+  # AWS requires you to manually confirm the subscription via email link).
+  TaskManagerAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub task-manager-alarms-${Environment}
+ 
+  TaskManagerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub task-manager-error-rate-${Environment}
+      AlarmDescription: Triggers when Lambda error count exceeds threshold in a 5-minute window
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TaskManagerFunction
+      Statistic: Sum
+      Period: 300                                       # 5-minute evaluation window
+      EvaluationPeriods: 1
+      Threshold: 5                                      # Alarm fires if more than 5 errors in 5 minutes
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching                    # No invocations ≠ an error condition
+      AlarmActions:
+        - !Ref TaskManagerAlarmTopic
+      OKActions:
+        - !Ref TaskManagerAlarmTopic                     # Also notifies when it RECOVERS
+
+  # ── 6. CloudWatch Log Group ─────────────────────────────────
+  TaskManagerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-${Environment}
+      RetentionInDays: 14                               # Auto-delete logs after 14 days
+
+
+# ─────────────────────────────────────────────────────────────
+# Outputs — printed after deploy, useful for testing
+# ─────────────────────────────────────────────────────────────
+Outputs:
+  ApiUrl:
+    Description: Live API Gateway URL
+    Value: !Sub https://${TaskManagerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    # Example: https://abc123.execute-api.us-east-1.amazonaws.com/dev
+
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt TaskManagerFunction.Arn
+
+  DynamoDBTableName:
+    Description: DynamoDB table name
+    Value: !Ref TaskTable
+    
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID — needed to create test users
+    Value: !Ref TaskManagerUserPool
+ 
+  CognitoUserPoolClientId:
+    Description: Cognito App Client ID — needed for login requests
+    Value: !Ref TaskManagerUserPoolClient
+  
+  ApiKeyId:
+    Description: API Key ID — retrieve the actual key value with `aws apigateway get-api-key --api-key <this-id> --include-value`
+    Value: !Ref TaskManagerApiKey
+ 
+  DashboardUrl:
+    Description: Direct link to the CloudWatch Dashboard
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=task-manager-dashboard-${Environment}
+ 
+  AlarmTopicArn:
+    Description: SNS Topic ARN — subscribe your email to this to receive alarm notifications
+    Value: !Ref TaskManagerAlarmTopic
