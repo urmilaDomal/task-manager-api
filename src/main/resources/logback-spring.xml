@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         LOCAL DEV PROFILE — human-readable console output
+         Active whenever "lambda" profile is NOT set (i.e. mvn spring-boot:run)
+         ═══════════════════════════════════════════════════════════════ -->
+    <springProfile name="!lambda">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         LAMBDA PROFILE — structured JSON output for CloudWatch
+         Active when SPRING_PROFILES_ACTIVE=lambda (set in template.yaml)
+         ═══════════════════════════════════════════════════════════════ -->
+    <springProfile name="lambda">
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <!-- Lambda captures stdout automatically and forwards it to
+                 CloudWatch Logs — no separate "CloudWatch appender" needed.
+                 We just need our stdout to BE valid JSON. -->
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!-- Custom field names, included in every log line -->
+                <customFields>{"application":"task-manager-api"}</customFields>
+
+                <!-- Adds Lambda's request/trace context if present, useful
+                     for correlating logs to a specific API request -->
+                <includeMdcKeyName>requestId</includeMdcKeyName>
+                <includeMdcKeyName>functionName</includeMdcKeyName>
+
+                <!-- Excludes noisy/redundant default fields to keep logs lean -->
+                <fieldNames>
+                    <timestamp>timestamp</timestamp>
+                    <message>message</message>
+                    <logger>logger</logger>
+                    <thread>[ignore]</thread>
+                    <level>level</level>
+                    <levelValue>[ignore]</levelValue>
+                    <version>[ignore]</version>
+                </fieldNames>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+
+        <!-- Reduce noise from framework internals — keep your own app logs
+             at INFO/DEBUG while quieting Spring's own bootstrap chatter -->
+        <logger name="org.springframework" level="WARN"/>
+        <logger name="com.amazonaws" level="WARN"/>
+        <logger name="software.amazon.awssdk" level="WARN"/>
+    </springProfile>
+
+</configuration>
