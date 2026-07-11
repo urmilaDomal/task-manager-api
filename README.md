@@ -234,3 +234,44 @@ https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashbo
 ---
  
 
+
+---
+
+## Resume Line
+
+> "Built a serverless Task Manager REST API using Java 17, Spring Boot 3, AWS Lambda,
+> API Gateway, DynamoDB, and Cognito — with JWT authentication, per-user authorization,
+> structured CloudWatch logging, infrastructure as code via AWS SAM, rate limiting,
+> and CI/CD via GitHub Actions with OIDC. Implemented a dual-repository pattern
+> supporting both H2 (local) and DynamoDB (Lambda) from a single interface,
+> with 27 automated tests across unit and integration layers."
+
+---
+
+## What I Learned
+
+### AWS & Cloud
+- **Lambda cold starts** — why JVM-based languages have slower cold starts and how SnapStart addresses this by snapshotting an initialized execution environment
+- **Lambda memory = CPU** — increasing MemorySize proportionally increases CPU allocation, reducing cold start time and execution duration
+- **CloudFormation intrinsic functions** — how !Ref, !Sub, and !GetAtt wire resources together at deploy time without hardcoding values
+- **IAM least privilege** — scoping Lambda permissions via SAM DynamoDBCrudPolicy instead of broad account-level access
+- **OIDC in CI/CD** — why short-lived OIDC tokens are safer than storing long-lived AWS access keys as GitHub secrets
+- **PAY_PER_REQUEST DynamoDB** — no capacity planning, scales automatically, costs nothing when idle
+
+### Spring Boot & Java
+- **Dual repository pattern** — @Profile activates different implementations of the same interface per environment
+- **Flat JAR vs BOOT-INF** — Spring Boot repackaging wraps classes in BOOT-INF/classes/ which Lambda cannot read
+- **@PrePersist silently fails on DynamoDB** — JPA lifecycle hooks only fire under Hibernate; timestamps moved to service layer
+- **MDC for request tracing** — setting requestId in MDC once per request attaches it to every log line automatically
+
+### Security
+- **Authentication vs Authorization** — Cognito JWT proves who you are; ownership checks prove you are allowed to do this specific thing
+- **404 vs 403 for ownership failures** — returning 403 confirms the resource exists; 404 gives nothing away
+- **JWT sub vs email** — sub is Cognito immutable UUID; email can change; sub used for ownership checks
+- **API Gateway validates JWT before Lambda runs** — invalid tokens rejected at gateway, saving Lambda compute cost
+
+### Debugging Real Problems
+- **Spring Boot 4 vs 3.2.5 conflict** — aws-serverless-java-container built for Boot 3.x caused ClassNotFoundException on Boot 4
+- **BOOT-INF/classes vs flat JAR** — first Lambda deployment failed because shade plugin ran after Spring Boot repackage
+- **samconfig.toml caching bad values** — wrong Environment value kept being reused on every sam deploy
+- **Duplicate @ExceptionHandler** — merging generated code created two handlers for MethodArgumentNotValidException
