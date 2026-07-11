@@ -85,7 +85,7 @@ jobs:
             --no-fail-on-empty-changeset \
             --parameter-overrides Environment=dev
 
-     - name: Print deployed API URL
+      - name: Print deployed API URL
         run: |
           aws cloudformation describe-stacks \
             --stack-name task-manager-api \
