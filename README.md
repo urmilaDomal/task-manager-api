@@ -275,3 +275,20 @@ https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashbo
 - **BOOT-INF/classes vs flat JAR** — first Lambda deployment failed because shade plugin ran after Spring Boot repackage
 - **samconfig.toml caching bad values** — wrong Environment value kept being reused on every sam deploy
 - **Duplicate @ExceptionHandler** — merging generated code created two handlers for MethodArgumentNotValidException
+
+---
+
+## Load Test Results
+
+Tested with k6 against live AWS infrastructure (Lambda + API Gateway + DynamoDB):
+
+| Metric | Result |
+|---|---|
+| Peak concurrent users | 50 |
+| Total requests | 12,555 |
+| Requests per second | 51.85 |
+| p95 latency | 139ms |
+| Error rate | 0.02% |
+| Test duration | 4 minutes |
+
+Full CRUD cycle tested per virtual user (POST → GET → GET/{id} → PUT → DELETE).
