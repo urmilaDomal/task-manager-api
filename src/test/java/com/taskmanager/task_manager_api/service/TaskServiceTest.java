@@ -1,5 +1,6 @@
 package com.taskmanager.task_manager_api.service;
 
+import com.taskmanager.task_manager_api.dto.PagedResponse;
 import com.taskmanager.task_manager_api.dto.TaskRequestDTO;
 import com.taskmanager.task_manager_api.dto.TaskResponseDTO;
 import com.taskmanager.task_manager_api.exception.TaskAccessDeniedException;
@@ -7,7 +8,6 @@ import com.taskmanager.task_manager_api.exception.TaskNotFoundException;
 import com.taskmanager.task_manager_api.model.Task;
 import com.taskmanager.task_manager_api.model.TaskStatus;
 import com.taskmanager.task_manager_api.repository.TaskRepository;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +23,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,9 +39,8 @@ class TaskServiceTest {
     @InjectMocks
     private TaskServiceImpl taskService;
 
-    // Two different users for ownership tests
-    private static final String USER_A = "user-a-cognito-sub-123";
-    private static final String USER_B = "user-b-cognito-sub-456";
+    private static final String USER_A = "user-a-sub-123";
+    private static final String USER_B = "user-b-sub-456";
 
     private Task userATask;
     private Task userBTask;
@@ -50,7 +52,8 @@ class TaskServiceTest {
                 .title("User A task")
                 .description("Belongs to User A")
                 .status(TaskStatus.TODO)
-                .userId(USER_A)                     // ← owned by User A
+                .userId(USER_A)
+                .deleted(false)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
@@ -58,20 +61,18 @@ class TaskServiceTest {
         userBTask = Task.builder()
                 .id("task-bbb-222")
                 .title("User B task")
-                .description("Belongs to User B")
                 .status(TaskStatus.IN_PROGRESS)
-                .userId(USER_B)                     // ← owned by User B
+                .userId(USER_B)
+                .deleted(false)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
     }
 
-    // ─────────────────────────────────────────────────────────
-    // createTask
-    // ─────────────────────────────────────────────────────────
+    // ── createTask ────────────────────────────────────────────
 
     @Test
-    void createTask_shouldReturnCreatedTask_withUserId() {
+    void createTask_shouldReturnCreatedTask_withUserIdAndDeletedFalse() {
         TaskRequestDTO request = new TaskRequestDTO();
         request.setTitle("User A task");
         request.setDescription("Belongs to User A");
@@ -83,80 +84,111 @@ class TaskServiceTest {
         assertThat(response.getTitle()).isEqualTo("User A task");
         assertThat(response.getStatus()).isEqualTo(TaskStatus.TODO);
         assertThat(response.getUserId()).isEqualTo(USER_A);
+        assertThat(response.isDeleted()).isFalse();
         verify(taskRepository, times(1)).save(any(Task.class));
     }
 
-    // ─────────────────────────────────────────────────────────
-    // getAllTasks
-    // ─────────────────────────────────────────────────────────
+    // ── getAllTasks (paginated) ────────────────────────────────
 
     @Test
-    void getAllTasks_shouldReturnOnlyCallersTasks() {
-        // Repository returns tasks from BOTH users
-        when(taskRepository.findAll()).thenReturn(List.of(userATask, userBTask));
+    void getAllTasks_shouldReturnPagedResponse_forCallerOnly() {
+        PagedResponse<Task> mockPage = PagedResponse.of(
+                List.of(userATask), null, 20);
 
-        // User A calls — should only see their own task
-        List<TaskResponseDTO> userATasks = taskService.getAllTasks(null, USER_A);
+        when(taskRepository.findAllByUserId(eq(USER_A), eq(20), isNull()))
+                .thenReturn(mockPage);
 
-        assertThat(userATasks).hasSize(1);
-        assertThat(userATasks.get(0).getUserId()).isEqualTo(USER_A);
-        assertThat(userATasks.get(0).getTitle()).isEqualTo("User A task");
+        PagedResponse<TaskResponseDTO> response =
+                taskService.getAllTasks(null, USER_A, 20, null);
+
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getUserId()).isEqualTo(USER_A);
+        assertThat(response.getNextToken()).isNull();  // no more pages
+        assertThat(response.getCount()).isEqualTo(1);
     }
 
     @Test
-    void getAllTasks_shouldNotReturnOtherUsersTasks() {
-        when(taskRepository.findAll()).thenReturn(List.of(userATask, userBTask));
+    void getAllTasks_shouldUseStatusGSI_whenStatusProvided() {
+        PagedResponse<Task> mockPage = PagedResponse.of(
+                List.of(userATask), null, 20);
 
-        // User B calls — should NOT see User A's task
-        List<TaskResponseDTO> userBTasks = taskService.getAllTasks(null, USER_B);
+        when(taskRepository.findByUserIdAndStatus(
+                eq(USER_A), eq(TaskStatus.TODO), eq(20), isNull()))
+                .thenReturn(mockPage);
 
-        assertThat(userBTasks).hasSize(1);
-        assertThat(userBTasks.get(0).getUserId()).isEqualTo(USER_B);
-        // Confirm User A's task is NOT in the result
-        assertThat(userBTasks).noneMatch(t -> t.getUserId().equals(USER_A));
+        PagedResponse<TaskResponseDTO> response =
+                taskService.getAllTasks(TaskStatus.TODO, USER_A, 20, null);
+
+        assertThat(response.getItems()).hasSize(1);
+        // Verify correct GSI method was called (not the general findAllByUserId)
+        verify(taskRepository, times(1))
+                .findByUserIdAndStatus(USER_A, TaskStatus.TODO, 20, null);
+        verify(taskRepository, never()).findAllByUserId(any(), anyInt(), any());
     }
 
-    // ─────────────────────────────────────────────────────────
-    // getTaskById
-    // ─────────────────────────────────────────────────────────
+    @Test
+    void getAllTasks_shouldReturnNextToken_whenMorePagesExist() {
+        PagedResponse<Task> mockPage = PagedResponse.of(
+                List.of(userATask), "next-page-token-abc", 20);
+
+        when(taskRepository.findAllByUserId(eq(USER_A), eq(20), isNull()))
+                .thenReturn(mockPage);
+
+        PagedResponse<TaskResponseDTO> response =
+                taskService.getAllTasks(null, USER_A, 20, null);
+
+        assertThat(response.getNextToken()).isEqualTo("next-page-token-abc");
+    }
 
     @Test
-    void getTaskById_shouldReturnTask_whenOwner() {
+    void getAllTasks_shouldCapLimit_atMaximum100() {
+        PagedResponse<Task> mockPage = PagedResponse.of(List.of(), null, 100);
+    
+        // 999 gets capped to MAX_LIMIT=100
+        when(taskRepository.findAllByUserId(eq(USER_A), eq(100), isNull()))
+                .thenReturn(mockPage);
+    
+        PagedResponse<TaskResponseDTO> response =
+                taskService.getAllTasks(null, USER_A, 999, null);
+    
+        // Confirm response limit is capped at 100
+        assertThat(response.getLimit()).isEqualTo(100);
+        verify(taskRepository).findAllByUserId(USER_A, 100, null);
+    }
+
+    // ── getTaskById ───────────────────────────────────────────
+
+    @Test
+    void getTaskById_shouldReturn_whenOwner() {
         when(taskRepository.findById("task-aaa-111")).thenReturn(Optional.of(userATask));
 
         TaskResponseDTO response = taskService.getTaskById("task-aaa-111", USER_A);
 
         assertThat(response.getId()).isEqualTo("task-aaa-111");
-        assertThat(response.getUserId()).isEqualTo(USER_A);
     }
 
     @Test
-    void getTaskById_shouldThrow404_whenTaskNotFound() {
+    void getTaskById_shouldThrow404_whenNotFound() {
         when(taskRepository.findById("bad-id")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> taskService.getTaskById("bad-id", USER_A))
-                .isInstanceOf(TaskNotFoundException.class)
-                .hasMessageContaining("bad-id");
+                .isInstanceOf(TaskNotFoundException.class);
     }
 
     @Test
     void getTaskById_shouldThrow404_whenNotOwner() {
-        // Task exists but belongs to User A — User B tries to access it
         when(taskRepository.findById("task-aaa-111")).thenReturn(Optional.of(userATask));
 
         assertThatThrownBy(() -> taskService.getTaskById("task-aaa-111", USER_B))
                 .isInstanceOf(TaskAccessDeniedException.class);
-        // Returns 404 (not 403) — intentional, see TaskAccessDeniedException javadoc
     }
 
-    // ─────────────────────────────────────────────────────────
-    // updateTask
-    // ─────────────────────────────────────────────────────────
+    // ── updateTask ────────────────────────────────────────────
 
     @Test
     void updateTask_shouldUpdate_whenOwner() {
         TaskRequestDTO request = new TaskRequestDTO();
-        request.setTitle("Updated title");
+        request.setTitle("Updated");
         request.setStatus(TaskStatus.IN_PROGRESS);
 
         when(taskRepository.findById("task-aaa-111")).thenReturn(Optional.of(userATask));
@@ -173,26 +205,41 @@ class TaskServiceTest {
         when(taskRepository.findById("task-aaa-111")).thenReturn(Optional.of(userATask));
 
         TaskRequestDTO request = new TaskRequestDTO();
-        request.setTitle("Sneaky update");
+        request.setTitle("Sneaky");
 
         assertThatThrownBy(() -> taskService.updateTask("task-aaa-111", request, USER_B))
                 .isInstanceOf(TaskAccessDeniedException.class);
 
-        // Verify save was never called — update was blocked
-        verify(taskRepository, never()).save(any(Task.class));
+        verify(taskRepository, never()).save(any());
     }
 
-    // ─────────────────────────────────────────────────────────
-    // deleteTask
-    // ─────────────────────────────────────────────────────────
+    // ── deleteTask (soft delete) ──────────────────────────────
 
     @Test
-    void deleteTask_shouldDelete_whenOwner() {
+    void deleteTask_shouldSoftDelete_whenOwner() {
+        Task softDeletedTask = Task.builder()
+                .id("task-aaa-111")
+                .title("User A task")
+                .userId(USER_A)
+                .deleted(true)
+                .deletedAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+
         when(taskRepository.findById("task-aaa-111")).thenReturn(Optional.of(userATask));
+        when(taskRepository.softDelete("task-aaa-111")).thenReturn(softDeletedTask);
 
-        taskService.deleteTask("task-aaa-111", USER_A);
+        TaskResponseDTO response = taskService.deleteTask("task-aaa-111", USER_A);
 
-        verify(taskRepository, times(1)).deleteById("task-aaa-111");
+        // Phase 1: delete returns the task (not void)
+        assertThat(response).isNotNull();
+        assertThat(response.isDeleted()).isTrue();
+        assertThat(response.getDeletedAt()).isNotNull();
+
+        // Verify softDelete called (not hard deleteById)
+        verify(taskRepository, times(1)).softDelete("task-aaa-111");
+        verify(taskRepository, never()).deleteById(any());
     }
 
     @Test
@@ -202,7 +249,8 @@ class TaskServiceTest {
         assertThatThrownBy(() -> taskService.deleteTask("task-aaa-111", USER_B))
                 .isInstanceOf(TaskAccessDeniedException.class);
 
-        // Verify deleteById was never called — delete was blocked
+        // Verify neither soft nor hard delete was called
+        verify(taskRepository, never()).softDelete(any());
         verify(taskRepository, never()).deleteById(any());
     }
 

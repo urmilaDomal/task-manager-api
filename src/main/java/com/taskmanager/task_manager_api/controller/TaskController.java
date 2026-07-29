@@ -3,6 +3,7 @@ package com.taskmanager.task_manager_api.controller;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.taskmanager.task_manager_api.dto.PagedResponse;
 import com.taskmanager.task_manager_api.dto.TaskRequestDTO;
 import com.taskmanager.task_manager_api.dto.TaskResponseDTO;
 import com.taskmanager.task_manager_api.model.TaskStatus;
@@ -10,11 +11,10 @@ import com.taskmanager.task_manager_api.service.TaskService;
 import com.taskmanager.task_manager_api.util.JwtUtil;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-
-import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -61,13 +61,22 @@ public class TaskController {
     }
  
     @GetMapping
-    @Operation(summary = "Get all tasks for the authenticated user")
-    public ResponseEntity<List<TaskResponseDTO>> getAllTasks(
+    @Operation(summary = "Get paginated tasks for the authenticated user")
+    public ResponseEntity<PagedResponse<TaskResponseDTO>> getAllTasks(
+            @Parameter(description = "Filter by status") 
             @RequestParam(required = false) TaskStatus status,
+ 
+            @Parameter(description = "Max items per page (default 20, max 100)")
+            @RequestParam(defaultValue = "20") int limit,
+ 
+            @Parameter(description = "Cursor from previous response for next page")
+            @RequestParam(required = false) String nextToken,
+ 
             @RequestHeader("Authorization") String token) {
  
         String userId = JwtUtil.extractUserId(token);
-        return ResponseEntity.ok(taskService.getAllTasks(status, userId));
+        return ResponseEntity.ok(
+                taskService.getAllTasks(status, userId, limit, nextToken));
     }
  
     @GetMapping("/{id}")
@@ -92,14 +101,15 @@ public class TaskController {
     }
  
     @DeleteMapping("/{id}")
-    @Operation(summary = "Delete a task — only allowed if owned by the caller")
-    public ResponseEntity<Void> deleteTask(
+    @Operation(summary = "Soft delete a task — sets deleted=true, row kept for audit")
+    public ResponseEntity<TaskResponseDTO> deleteTask(
             @PathVariable String id,
             @RequestHeader("Authorization") String token) {
  
         String userId = JwtUtil.extractUserId(token);
-        taskService.deleteTask(id, userId);
-        return ResponseEntity.noContent().build();
+        // Phase 1 change: returns 200 + deleted task (not 204 No Content)
+        // This lets the client confirm WHAT was deleted and WHEN
+        return ResponseEntity.ok(taskService.deleteTask(id, userId));
     }
     
 }
