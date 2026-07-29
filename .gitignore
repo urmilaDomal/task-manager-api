@@ -18,3 +18,4 @@ HELP.md
 .vscode/
 mvnw
 mvnw.cmd
+.gitattributes
