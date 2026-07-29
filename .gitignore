@@ -16,3 +16,5 @@ samconfig.toml
 load-test-results.json
 HELP.md
 .vscode/
+mvnw
+mvnw.cmd
