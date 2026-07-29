@@ -10,3 +10,4 @@ samconfig.toml
 load-test-results.json
 HELP.md
 .vscode/
+.mvn/
