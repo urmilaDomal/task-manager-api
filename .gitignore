@@ -11,3 +11,8 @@ load-test-results.json
 HELP.md
 .vscode/
 .mvn/
+.mvn/
+samconfig.toml
+load-test-results.json
+HELP.md
+.vscode/
