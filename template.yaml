@@ -200,16 +200,36 @@ Resources:
   # ── 5. DynamoDB Table ───────────────────────────────────────
   TaskTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub tasks-${Environment}              # e.g. tasks-dev
-      BillingMode: PAY_PER_REQUEST                      # No capacity planning needed — pay per use
+      TableName: !Sub tasks-${Environment}
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: id
-          AttributeType: S                              # S = String
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
       KeySchema:
         - AttributeName: id
-          KeyType: HASH                                 # id is the partition key
-  
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: userId-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: userId-status-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
    # ── 8. CloudWatch Dashboard ─────────────────────────────────
   # A visual page combining Lambda + API Gateway metrics in one view.
   # View it at: CloudWatch console → Dashboards → task-manager-dashboard-{env}

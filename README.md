@@ -10,13 +10,13 @@ A production-grade serverless REST API built with **Java 17**, **Spring Boot 3**
  
 ```
                          ┌─────────────────────────┐
-  Client                 │     AWS Cognito          │
-  (curl / Postman)  ───► │   (JWT Authentication)   │
+  Client                 │     AWS Cognito         │
+  (curl / Postman)  ───► │   (JWT Authentication)  │
        │                 └──────────┬──────────────┘
        │                            │ validates token
        ▼                            ▼
   ┌─────────────────────────────────────────────────┐
-  │              AWS API Gateway                     │
+  │              AWS API Gateway                    │
   │   • Cognito Authorizer (401 on invalid token)   │
   │   • Rate limiting (100 req/s, burst 50)         │
   │   • CloudWatch access logging                   │
@@ -24,7 +24,7 @@ A production-grade serverless REST API built with **Java 17**, **Spring Boot 3**
                          │ invokes (only valid requests)
                          ▼
   ┌──────────────────────────────────────────────────┐
-  │              AWS Lambda                           │
+  │              AWS Lambda                          │
   │   • Java 17 + Spring Boot 3                      │
   │   • SnapStart (reduces cold start to ~1s)        │
   │   • StreamLambdaHandler bridges Lambda ↔ Spring  │
@@ -32,14 +32,14 @@ A production-grade serverless REST API built with **Java 17**, **Spring Boot 3**
                          │ reads/writes
                          ▼
   ┌──────────────────────────────────────────────────┐
-  │              AWS DynamoDB                         │
+  │              AWS DynamoDB                        │
   │   • PAY_PER_REQUEST billing                      │
   │   • Schema-less — only partition key (id) defined│
   └──────────────────────────────────────────────────┘
                          │
   ┌──────────────────────▼───────────────────────────┐
-  │           AWS CloudWatch                          │
-  │   • Structured JSON logs (queryable via Insights) │
+  │           AWS CloudWatch                         │
+  │   • Structured JSON logs (queryable via Insights)│
   │   • Dashboard: invocations, errors, p50/p95/p99  │
   │   • Alarm: fires SNS notification if errors > 5  │
   └──────────────────────────────────────────────────┘

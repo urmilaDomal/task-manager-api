@@ -1,8 +1,8 @@
 package com.taskmanager.task_manager_api.repository;
 
-import java.util.List;
 import java.util.Optional;
 
+import com.taskmanager.task_manager_api.dto.PagedResponse;
 import com.taskmanager.task_manager_api.model.Task;
 import com.taskmanager.task_manager_api.model.TaskStatus;
 
@@ -19,15 +19,54 @@ import com.taskmanager.task_manager_api.model.TaskStatus;
  */
 public interface TaskRepository {
  
+    // Write operations
     Task save(Task task);
+
+    // Read operations
+    /**
+     * Returns a page of tasks for a specific user.
+     * Uses GSI: userId-index
+     *
+     * @param userId    Cognito sub of the requesting user
+     * @param limit     max items per page (default 20)
+     * @param nextToken cursor from previous page (null for first page)
+     */
+    PagedResponse<Task> findAllByUserId(String userId, int limit, String nextToken);
+
+    /**
+     * Returns a page of tasks filtered by userId AND status.
+     * Uses GSI: userId-status-index (composite key)
+     * Much more efficient than findAllByUserId + in-memory filter.
+     *
+     * @param userId    Cognito sub of the requesting user
+     * @param status    task status to filter by
+     * @param limit     max items per page
+     * @param nextToken cursor from previous page
+     */
+    PagedResponse<Task> findByUserIdAndStatus(String userId, TaskStatus status, int limit, String nextToken);
+
  
-    List<Task> findAll();
- 
-    List<Task> findByStatus(TaskStatus status);
- 
+    /**
+     * Finds a single task by its primary key.
+     * Uses the main table (not a GSI) — most efficient lookup.
+     */
     Optional<Task> findById(String id);
  
     boolean existsById(String id);
  
+    // ── Delete operations ─────────────────────────────────────
+ 
+    /**
+     * Soft delete — sets deleted=true and deletedAt=now().
+     * The row stays in DynamoDB. All find* methods exclude deleted items.
+     * Use this for all user-facing delete operations.
+     */
+    Task softDelete(String id);
+ 
+    /**
+     * Hard delete — permanently removes the row.
+     * Only used internally or for admin cleanup.
+     * NOT exposed via the REST API.
+     */
     void deleteById(String id);
 }
