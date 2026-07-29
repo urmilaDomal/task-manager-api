@@ -6,3 +6,7 @@ target/
 *.iml
 refresh.sh
 refresh.sh
+samconfig.toml
+load-test-results.json
+HELP.md
+.vscode/
