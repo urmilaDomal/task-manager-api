@@ -44,7 +44,6 @@ public class AuthorizerHandler
         implements RequestHandler<APIGatewayCustomAuthorizerEvent, IamPolicyResponse> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    @SuppressWarnings("unused")
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     private static final DynamoDbClient DYNAMO = DynamoDbClient.builder().build();
 
@@ -63,10 +62,21 @@ public class AuthorizerHandler
     public IamPolicyResponse handleRequest(
             APIGatewayCustomAuthorizerEvent event, Context context) {
 
-        String token = event.getAuthorizationToken();
-        String methodArn = event.getMethodArn();
+        // REQUEST type authorizer — token is in headers, not authorizationToken
+        // TOKEN type uses event.getAuthorizationToken()
+        // REQUEST type uses event.getHeaders().get("Authorization")
+        String token = null;
+        if (event.getHeaders() != null) {
+            // Try both capitalization variants — API Gateway may normalize headers
+            token = event.getHeaders().get("Authorization");
+            if (token == null) {
+                token = event.getHeaders().get("authorization");
+            }
+        }
 
-        log.info("Authorizer invoked for methodArn={}", methodArn);
+        String methodArn = event.getMethodArn();
+        log.info("Authorizer invoked for methodArn={} tokenPresent={}", 
+                methodArn, token != null);
 
         try {
             // ── Step 1: Basic token format check ──────────────
