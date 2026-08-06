@@ -20,4 +20,5 @@ public class DynamoDbProperties {
 
     private String tableName;       // maps to aws.dynamodb.table-name
                                     // Spring auto-converts kebab-case to camelCase
+    private String blocklistTableName;  // aws.dynamodb.blocklist-table-name
 }

@@ -69,4 +69,11 @@ public class GlobalExceptionHandler {
         return body;
     }
 
+    @ExceptionHandler(org.springframework.web.bind.MissingRequestHeaderException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingHeader(
+        org.springframework.web.bind.MissingRequestHeaderException ex) {
+        return buildError(HttpStatus.BAD_REQUEST,
+            "Required header '" + ex.getHeaderName() + "' is missing");
+    }
+
 }

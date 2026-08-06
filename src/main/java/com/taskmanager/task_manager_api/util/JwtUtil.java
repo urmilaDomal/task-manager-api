@@ -59,6 +59,33 @@ public class JwtUtil {
             throw new RuntimeException("Invalid token — could not extract user ID", e);
         }
     }
+
+     /**
+     * Extracts the 'jti' claim — unique ID for this specific token.
+     * Used for token revocation — stored in blocklist on logout.
+     *
+     * Every Cognito token has a unique jti — two tokens for the same
+     * user have different jtis. This lets us revoke one token without
+     * affecting others (e.g. user logged in on multiple devices).
+     */
+     public static String extractJti(String token) {
+        return extractClaim(token, "jti");
+    }
+ 
+    /**
+     * Extracts the 'exp' claim — token expiry as Unix epoch seconds.
+     * Used to set DynamoDB TTL on blocklist entries so they auto-delete
+     * when the token would have expired anyway.
+     */
+    public static long extractExp(String token) {
+        try {
+            JsonNode claims = decodePayload(token);
+            return claims.get("exp").asLong();
+        } catch (Exception e) {
+            log.error("Failed to extract exp from token: {}", e.getMessage());
+            throw new RuntimeException("Invalid token — could not extract expiry", e);
+        }
+    }
  
     /**
      * Extracts the user's email from the token.
@@ -66,15 +93,33 @@ public class JwtUtil {
      * (emails can change — use sub instead).
      */
     public static String extractEmail(String token) {
+        return extractClaim(token, "email");
+    }
+
+    // ── Private helpers ───────────────────────────────────────
+ 
+    private static String extractClaim(String token, String claimName) {
         try {
-            String[] parts = token.split("\\.");
-            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
-            JsonNode claims = objectMapper.readTree(payload);
-            return claims.get("email").asText();
+            JsonNode claims = decodePayload(token);
+            JsonNode claim = claims.get(claimName);
+            if (claim == null) {
+                log.warn("Claim '{}' not found in token", claimName);
+                return null;
+            }
+            return claim.asText();
         } catch (Exception e) {
-            log.error("Failed to extract email from token: {}", e.getMessage());
-            return "unknown";
+            log.error("Failed to extract '{}' from token: {}", claimName, e.getMessage());
+            throw new RuntimeException("Invalid token — could not extract " + claimName, e);
         }
+    }
+ 
+    private static JsonNode decodePayload(String token) throws Exception {
+        String[] parts = token.split("\\.");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException("Invalid JWT format — expected 3 parts");
+        }
+        String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+        return objectMapper.readTree(payload);
     }
  
     private JwtUtil() {
