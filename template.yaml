@@ -157,12 +157,10 @@ Resources:
           # More powerful than Cognito Authorizer — supports revocation
           LambdaAuthorizer:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
-            FunctionPayloadType: REQUEST
-            IdentitySource: method.request.header.Authorization
+            FunctionPayloadType: TOKEN
             Identity:
-              Headers:
-                - Authorization
-            AuthorizerResultTtlInSeconds: 300             # Cache result 5 min per token
+              ReauthorizeEvery: 300
+              Header: Authorization
         DefaultAuthorizer: LambdaAuthorizer
 
   # ── 4. API Gateway permission to invoke Lambda Authorizer ────
