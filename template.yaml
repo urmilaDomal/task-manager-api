@@ -159,9 +159,9 @@ Resources:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
             FunctionPayloadType: REQUEST
             IdentitySource: method.request.header.Authorization
-            #Identity:
-             # Headers:
-               # - Authorization
+            Identity:
+              Headers:
+                - Authorization
             AuthorizerResultTtlInSeconds: 300             # Cache result 5 min per token
         DefaultAuthorizer: LambdaAuthorizer
 
