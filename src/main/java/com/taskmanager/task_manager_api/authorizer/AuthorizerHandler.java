@@ -64,10 +64,14 @@ public class AuthorizerHandler
     public IamPolicyResponse handleRequest(
             APIGatewayCustomAuthorizerEvent event, Context context) {
 
+        // TOKEN type authorizer — token is in authorizationToken field
+        // This is set by API Gateway from the Authorization header value
+        // REQUEST type would use event.getHeaders().get("Authorization") instead
         String token = event.getAuthorizationToken();
         String methodArn = event.getMethodArn();
 
-        log.info("Authorizer invoked for methodArn={}", methodArn);
+        log.info("Authorizer invoked for methodArn={} tokenPresent={}",
+                methodArn, token != null);
 
         try {
             // ── Step 1: Basic token format check ──────────────
