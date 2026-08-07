@@ -44,6 +44,7 @@ public class AuthorizerHandler
         implements RequestHandler<APIGatewayCustomAuthorizerEvent, IamPolicyResponse> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    @SuppressWarnings("unused")
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     private static final DynamoDbClient DYNAMO = DynamoDbClient.builder().build();
 
@@ -54,6 +55,7 @@ public class AuthorizerHandler
 
     // Cognito JWKS URL — public keys used to verify JWT signatures
     // Format: https://cognito-idp.{region}.amazonaws.com/{userPoolId}/.well-known/jwks.json
+    @SuppressWarnings("unused")
     private static final String JWKS_URL = String.format(
             "https://cognito-idp.%s.amazonaws.com/%s/.well-known/jwks.json",
             REGION, USER_POOL_ID);
@@ -62,21 +64,10 @@ public class AuthorizerHandler
     public IamPolicyResponse handleRequest(
             APIGatewayCustomAuthorizerEvent event, Context context) {
 
-        // REQUEST type authorizer — token is in headers, not authorizationToken
-        // TOKEN type uses event.getAuthorizationToken()
-        // REQUEST type uses event.getHeaders().get("Authorization")
-        String token = null;
-        if (event.getHeaders() != null) {
-            // Try both capitalization variants — API Gateway may normalize headers
-            token = event.getHeaders().get("Authorization");
-            if (token == null) {
-                token = event.getHeaders().get("authorization");
-            }
-        }
-
+        String token = event.getAuthorizationToken();
         String methodArn = event.getMethodArn();
-        log.info("Authorizer invoked for methodArn={} tokenPresent={}", 
-                methodArn, token != null);
+
+        log.info("Authorizer invoked for methodArn={}", methodArn);
 
         try {
             // ── Step 1: Basic token format check ──────────────
