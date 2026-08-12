@@ -133,6 +133,7 @@ Resources:
       Policies:
         - DynamoDBReadPolicy:                             # Read-only — only needs to check blocklist
             TableName: !Ref TokenBlocklistTable
+        - XRayWriteOnlyPolicy: {}                         # Alows Authorizer to send traces
 
   # ── 3. API Gateway ──────────────────────────────────────────
   TaskManagerApi:
