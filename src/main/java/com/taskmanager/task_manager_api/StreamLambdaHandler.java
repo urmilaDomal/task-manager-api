@@ -6,6 +6,9 @@ import com.amazonaws.serverless.proxy.model.AwsProxyResponse;
 import com.amazonaws.serverless.proxy.spring.SpringBootLambdaContainerHandler;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
+import com.amazonaws.xray.AWSXRay;
+import com.amazonaws.xray.AWSXRayRecorderBuilder;
+import com.amazonaws.xray.strategy.sampling.NoSamplingStrategy;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,6 +23,14 @@ import org.slf4j.MDC;
  * On Lambda:           API Gateway  → Lambda → SpringBootLambdaContainerHandler → Controller
  *                                              ↑ this class does that job
  */
+/**                                                               
+                                                                      
+ * Phase 3 addition: X-Ray recorder configured in static block.         
+ * Runs once at cold start — configures X-Ray before any requests:      
+ *   - NoSamplingStrategy: trace ALL requests (not just a sample)       
+ *     useful for development; in production use DefaultSamplingStrategy
+ *     to avoid excessive tracing costs at high volume            
+ */   
 public class StreamLambdaHandler implements RequestStreamHandler {
 
     // ─────────────────────────────────────────────────────────
@@ -27,6 +38,18 @@ public class StreamLambdaHandler implements RequestStreamHandler {
     // (not on every request — this is the cold start)
     // ─────────────────────────────────────────────────────────
     private static final SpringBootLambdaContainerHandler<AwsProxyRequest, AwsProxyResponse> handler;
+
+     static {                                                                
+        // Configure X-Ray recorder before Spring Boot starts                               
+        // This ensures all DynamoDB calls are traced from the first request                
+        AWSXRay.setGlobalRecorder(                                                          
+                AWSXRayRecorderBuilder.standard()                                           
+                        .withDefaultPlugins()             // auto-detects Lambda environment
+                        .withSamplingStrategy(                                             
+                                new NoSamplingStrategy())  // trace 100% of requests in dev
+                        .build()
+        );
+    }
 
     static {
         try {

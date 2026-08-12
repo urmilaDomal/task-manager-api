@@ -136,6 +136,20 @@
             <version>1.2.3</version>
         </dependency>
 
+        <!-- AWS X-Ray SDK — distributed tracing across Lambda, DynamoDB, API Gateway -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-xray-recorder-sdk-core</artifactId>
+            <version>2.15.1</version>
+        </dependency>
+
+        <!-- X-Ray instrumentation for AWS SDK v2 (DynamoDB client) -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-xray-recorder-sdk-aws-sdk-v2</artifactId>
+            <version>2.15.1</version>
+        </dependency>
+
     </dependencies>
 
     <build>

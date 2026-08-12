@@ -10,6 +10,7 @@ Globals:
     Timeout: 30
     MemorySize: 512
     Runtime: java17
+    Tracing: Active              # Enables X-Ray on ALL Lambda functions
     Architectures:
       - x86_64
     Environment:
