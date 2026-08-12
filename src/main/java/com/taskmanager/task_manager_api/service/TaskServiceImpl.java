@@ -1,5 +1,7 @@
 package com.taskmanager.task_manager_api.service;
 
+import com.amazonaws.xray.AWSXRay;
+import com.amazonaws.xray.entities.Subsegment;
 import com.taskmanager.task_manager_api.dto.PagedResponse;
 import com.taskmanager.task_manager_api.dto.TaskRequestDTO;
 import com.taskmanager.task_manager_api.dto.TaskResponseDTO;
@@ -27,98 +29,150 @@ public class TaskServiceImpl implements TaskService {
 
     @Override
     public TaskResponseDTO createTask(TaskRequestDTO request, String userId) {
-        log.info("Creating task for userId={} title={}", userId, request.getTitle());
-        LocalDateTime now = LocalDateTime.now();
-        Task task = Task.builder()
-                .title(request.getTitle())
-                .description(request.getDescription())
-                .status(request.getStatus() != null ? request.getStatus() : TaskStatus.TODO)
-                .userId(userId)
-                .createdAt(now)
-                .updatedAt(now)
-                .deleted(false)         // explicitly not deleted on creation
-                .build();
-        Task saved = taskRepository.save(task);
-        log.info("Task created id={} userId={}", saved.getId(), userId);
-        return TaskResponseDTO.from(saved);
+        // Custom X-Ray subsegment — groups all work done for this operation
+        // Visible in X-Ray console as a named segment under the Lambda trace
+        Subsegment subsegment = AWSXRay.beginSubsegment("createTask");
+        try {
+            subsegment.putMetadata("userId", userId);
+            subsegment.putMetadata("title", request.getTitle());
+
+            log.info("Creating task for userId={} title={}", userId, request.getTitle());
+            LocalDateTime now = LocalDateTime.now();
+            Task task = Task.builder()
+                    .title(request.getTitle())
+                    .description(request.getDescription())
+                    .status(request.getStatus() != null
+                            ? request.getStatus()
+                            : TaskStatus.TODO)
+                    .userId(userId)
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .deleted(false)
+                    .build();
+
+            Task saved = taskRepository.save(task);
+            log.info("Task created id={} userId={}", saved.getId(), userId);
+
+            subsegment.putMetadata("taskId", saved.getId());
+            return TaskResponseDTO.from(saved);
+
+        } catch (Exception e) {
+            subsegment.addException(e);  // marks subsegment as faulted in X-Ray
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
+        }
     }
 
     @Override
     public PagedResponse<TaskResponseDTO> getAllTasks(TaskStatus status, String userId,
                                                       int limit, String nextToken) {
-        // Cap limit — use default if not specified, cap at max to prevent
-        // clients from requesting unbounded pages that exhaust Lambda memory
         int effectiveLimit = (limit <= 0) ? DEFAULT_LIMIT : Math.min(limit, MAX_LIMIT);
 
-        log.info("Getting tasks userId={} status={} limit={} hasToken={}",
-                userId, status, effectiveLimit, nextToken != null);
+        Subsegment subsegment = AWSXRay.beginSubsegment("getAllTasks");
+        try {
+            subsegment.putMetadata("userId", userId);
+            subsegment.putMetadata("status", status != null ? status.name() : "ALL");
+            subsegment.putMetadata("limit", effectiveLimit);
+            subsegment.putMetadata("hasNextToken", nextToken != null);
 
-        PagedResponse<Task> taskPage;
+            log.info("Getting tasks userId={} status={} limit={}", userId, status, effectiveLimit);
 
-        if (status != null) {
-            // Use userId-status-index GSI — most efficient path when status is specified
-            taskPage = taskRepository.findByUserIdAndStatus(
-                    userId, status, effectiveLimit, nextToken);
-        } else {
-            // Use userId-index GSI — all tasks for this user
-            taskPage = taskRepository.findAllByUserId(
-                    userId, effectiveLimit, nextToken);
+            PagedResponse<Task> taskPage;
+            if (status != null) {
+                taskPage = taskRepository.findByUserIdAndStatus(
+                        userId, status, effectiveLimit, nextToken);
+            } else {
+                taskPage = taskRepository.findAllByUserId(
+                        userId, effectiveLimit, nextToken);
+            }
+
+            subsegment.putMetadata("resultCount", taskPage.getItems().size());
+
+            return PagedResponse.of(
+                    taskPage.getItems().stream()
+                            .map(TaskResponseDTO::from)
+                            .collect(Collectors.toList()),
+                    taskPage.getNextToken(),
+                    effectiveLimit);
+
+        } catch (Exception e) {
+            subsegment.addException(e);
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
         }
-
-        // Convert Task entities to DTOs
-        return PagedResponse.of(
-                taskPage.getItems().stream()
-                        .map(TaskResponseDTO::from)
-                        .collect(Collectors.toList()),
-                taskPage.getNextToken(),
-                effectiveLimit);
     }
 
     @Override
     public TaskResponseDTO getTaskById(String id, String userId) {
-        log.info("Getting task id={} userId={}", id, userId);
-        Task task = findAndVerifyOwnership(id, userId);
-        return TaskResponseDTO.from(task);
+        Subsegment subsegment = AWSXRay.beginSubsegment("getTaskById");
+        try {
+            subsegment.putMetadata("taskId", id);
+            subsegment.putMetadata("userId", userId);
+
+            Task task = findAndVerifyOwnership(id, userId);
+            return TaskResponseDTO.from(task);
+
+        } catch (Exception e) {
+            subsegment.addException(e);
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
+        }
     }
 
     @Override
     public TaskResponseDTO updateTask(String id, TaskRequestDTO request, String userId) {
-        log.info("Updating task id={} userId={}", id, userId);
-        Task task = findAndVerifyOwnership(id, userId);
+        Subsegment subsegment = AWSXRay.beginSubsegment("updateTask");
+        try {
+            subsegment.putMetadata("taskId", id);
+            subsegment.putMetadata("userId", userId);
 
-        task.setTitle(request.getTitle());
-        task.setDescription(request.getDescription());
-        if (request.getStatus() != null) task.setStatus(request.getStatus());
-        task.setUpdatedAt(LocalDateTime.now());
+            Task task = findAndVerifyOwnership(id, userId);
+            task.setTitle(request.getTitle());
+            task.setDescription(request.getDescription());
+            if (request.getStatus() != null) {
+                task.setStatus(request.getStatus());
+            }
+            task.setUpdatedAt(LocalDateTime.now());
 
-        Task updated = taskRepository.save(task);
-        log.info("Task updated id={}", id);
-        return TaskResponseDTO.from(updated);
+            Task updated = taskRepository.save(task);
+            log.info("Task updated id={}", id);
+            return TaskResponseDTO.from(updated);
+
+        } catch (Exception e) {
+            subsegment.addException(e);
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
+        }
     }
 
     @Override
     public TaskResponseDTO deleteTask(String id, String userId) {
-        log.info("Soft deleting task id={} userId={}", id, userId);
-        findAndVerifyOwnership(id, userId);  // ownership check before delete
+        Subsegment subsegment = AWSXRay.beginSubsegment("deleteTask");
+        try {
+            subsegment.putMetadata("taskId", id);
+            subsegment.putMetadata("userId", userId);
 
-        Task deleted = taskRepository.softDelete(id);
-        log.info("Task soft deleted id={} deletedAt={}", id, deleted.getDeletedAt());
-        return TaskResponseDTO.from(deleted);
-        // Returns the deleted task so caller can confirm:
-        //   - what was deleted (title, status)
-        //   - when it was deleted (deletedAt)
+            findAndVerifyOwnership(id, userId);
+            Task deleted = taskRepository.softDelete(id);
+            log.info("Task soft deleted id={} deletedAt={}", id, deleted.getDeletedAt());
+
+            subsegment.putMetadata("deletedAt", deleted.getDeletedAt().toString());
+            return TaskResponseDTO.from(deleted);
+
+        } catch (Exception e) {
+            subsegment.addException(e);
+            throw e;
+        } finally {
+            AWSXRay.endSubsegment();
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────
 
-    /**
-     * Finds a task by ID and verifies the requesting user owns it.
-     * Throws TaskNotFoundException if task doesn't exist or is soft-deleted.
-     * Throws TaskAccessDeniedException (→ 404) if user doesn't own it.
-     *
-     * Single method reused by getById, update, and delete to avoid
-     * duplicating the find + ownership check logic in three places.
-     */
     private Task findAndVerifyOwnership(String id, String userId) {
         Task task = taskRepository.findById(id)
                 .orElseThrow(() -> new TaskNotFoundException(
