@@ -131,9 +131,9 @@ Resources:
           BLOCKLIST_TABLE_NAME: !Ref TokenBlocklistTable
           COGNITO_USER_POOL_ID: !Ref TaskManagerUserPool
       Policies:
-        - DynamoDBReadPolicy:                             # Read-only — only needs to check blocklist
+        - DynamoDBReadPolicy:
             TableName: !Ref TokenBlocklistTable
-        - XRayWriteOnlyPolicy: {}                         # Alows Authorizer to send traces
+        - XRayWriteOnlyPolicy              # Allows Authorizer to send traces
 
   # ── 3. API Gateway ──────────────────────────────────────────
   TaskManagerApi:
