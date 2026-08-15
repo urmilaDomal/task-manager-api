@@ -49,7 +49,6 @@ Resources:
             TableName: !Ref TaskTable
         - DynamoDBCrudPolicy:                             # Phase 2 — read/write blocklist
             TableName: !Ref TokenBlocklistTable
-        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
       Events:
         # All routes protected by LambdaAuthorizer (Phase 2)
         # LambdaAuthorizer validates JWT + checks token blocklist
@@ -134,7 +133,6 @@ Resources:
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref TokenBlocklistTable
-        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess              # Allows Authorizer to send traces
 
   # ── 3. API Gateway ──────────────────────────────────────────
   TaskManagerApi:
