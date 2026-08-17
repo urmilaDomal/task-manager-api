@@ -1,66 +1,53 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Task Manager REST API — Spring Boot on AWS Lambda
+Description: Task Manager REST API — Spring Boot on AWS Lambda (Phase 4 per-endpoint functions)
 
 # ─────────────────────────────────────────────────────────────
-# Global settings applied to ALL Lambda functions in this file
+# Global settings — applied to ALL Lambda functions
 # ─────────────────────────────────────────────────────────────
 Globals:
   Function:
     Timeout: 30
     MemorySize: 512
     Runtime: java17
-    Tracing: Active              # Enables X-Ray on ALL Lambda functions
+    Tracing: Active                                     # Phase 3 — X-Ray on all functions
     Architectures:
       - x86_64
     Environment:
       Variables:
         SPRING_PROFILES_ACTIVE: lambda
         TABLE_NAME: !Ref TaskTable
-        BLOCKLIST_TABLE_NAME: !Ref TokenBlocklistTable    # Phase 2 — token revocation
+        BLOCKLIST_TABLE_NAME: !Ref TokenBlocklistTable
 
-# ─────────────────────────────────────────────────────────────
-# Parameters
-# ─────────────────────────────────────────────────────────────
 Parameters:
   Environment:
     Type: String
     Default: dev
     AllowedValues: [dev, prod]
-    Description: Deployment environment
 
-# ─────────────────────────────────────────────────────────────
-# Resources
-# ─────────────────────────────────────────────────────────────
 Resources:
 
-  # ── 1. Main Lambda Function ──────────────────────────────────
-  TaskManagerFunction:
+  # ── Shared policies ──────────────────────────────────────────
+  # Reused across all task Lambda functions
+  # ────────────────────────────────────────────────────────────
+
+  # ── 1. GET /api/v1/tasks ────────────────────────────────────
+  GetTasksFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub task-manager-${Environment}
-      Handler: com.taskmanager.task_manager_api.StreamLambdaHandler::handleRequest
+      FunctionName: !Sub task-manager-get-tasks-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.GetTasksHandler::handleRequest
       CodeUri: target/task-manager-1.0.0.jar
-      Description: Task Manager REST API running on Lambda
+      Description: GET /api/v1/tasks — paginated task list with GSI query
+      MemorySize: 512
       SnapStart:
         ApplyOn: PublishedVersions
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TaskTable
-        - DynamoDBCrudPolicy:                             # Phase 2 — read/write blocklist
+        - DynamoDBReadPolicy:
             TableName: !Ref TokenBlocklistTable
       Events:
-        # All routes protected by LambdaAuthorizer (Phase 2)
-        # LambdaAuthorizer validates JWT + checks token blocklist
-        # before this Lambda ever runs
-        CreateTask:
-          Type: Api
-          Properties:
-            RestApiId: !Ref TaskManagerApi
-            Path: /api/v1/tasks
-            Method: POST
-            Auth:
-              Authorizer: LambdaAuthorizer
         GetAllTasks:
           Type: Api
           Properties:
@@ -69,6 +56,24 @@ Resources:
             Method: GET
             Auth:
               Authorizer: LambdaAuthorizer
+
+  # ── 2. GET /api/v1/tasks/{id} ────────────────────────────────
+  GetTaskFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-get-task-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.GetTaskHandler::handleRequest
+      CodeUri: target/task-manager-1.0.0.jar
+      Description: GET /api/v1/tasks/{id} — single task lookup
+      MemorySize: 512
+      SnapStart:
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TokenBlocklistTable
+      Events:
         GetTaskById:
           Type: Api
           Properties:
@@ -77,6 +82,50 @@ Resources:
             Method: GET
             Auth:
               Authorizer: LambdaAuthorizer
+
+  # ── 3. POST /api/v1/tasks ────────────────────────────────────
+  CreateTaskFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-create-task-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.CreateTaskHandler::handleRequest
+      CodeUri: target/task-manager-1.0.0.jar
+      Description: POST /api/v1/tasks — create new task with XSS sanitization
+      MemorySize: 512
+      SnapStart:
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TokenBlocklistTable
+      Events:
+        CreateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TaskManagerApi
+            Path: /api/v1/tasks
+            Method: POST
+            Auth:
+              Authorizer: LambdaAuthorizer
+
+  # ── 4. PUT /api/v1/tasks/{id} ────────────────────────────────
+  UpdateTaskFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-update-task-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.UpdateTaskHandler::handleRequest
+      CodeUri: target/task-manager-1.0.0.jar
+      Description: PUT /api/v1/tasks/{id} — update task title/description/status
+      MemorySize: 512
+      SnapStart:
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TokenBlocklistTable
+      Events:
         UpdateTask:
           Type: Api
           Properties:
@@ -85,6 +134,24 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: LambdaAuthorizer
+
+  # ── 5. DELETE /api/v1/tasks/{id} ─────────────────────────────
+  DeleteTaskFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-delete-task-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.DeleteTaskHandler::handleRequest
+      CodeUri: target/task-manager-1.0.0.jar
+      Description: DELETE /api/v1/tasks/{id} — soft delete, row retained for audit
+      MemorySize: 512
+      SnapStart:
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TokenBlocklistTable
+      Events:
         DeleteTask:
           Type: Api
           Properties:
@@ -93,6 +160,22 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: LambdaAuthorizer
+
+  # ── 6. POST /api/v1/auth/logout ──────────────────────────────
+  LogoutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub task-manager-logout-${Environment}
+      Handler: com.taskmanager.task_manager_api.handler.LogoutHandler::handleRequest
+      CodeUri: target/task-manager-1.0.0.jar
+      Description: POST /api/v1/auth/logout — revokes JWT token via blocklist
+      MemorySize: 256                                   # Smaller — just a DynamoDB write
+      SnapStart:
+        ApplyOn: PublishedVersions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TokenBlocklistTable
+      Events:
         Logout:
           Type: Api
           Properties:
@@ -102,30 +185,56 @@ Resources:
             Auth:
               Authorizer: LambdaAuthorizer
 
-  # ── 2. Lambda Version for SnapStart ─────────────────────────
-  # SnapStart takes a memory snapshot of the initialized Lambda
-  # execution environment — reduces cold start from ~8s to ~1s.
-  # Requires a published version — this resource creates it automatically
-  # on every deploy so SnapStart always uses the latest code.
-  TaskManagerFunctionVersion:
+  # ── SnapStart Version Resources ─────────────────────────────
+  # Required for SnapStart to activate — one per function.
+  # SnapStart snapshots the initialized JVM state after cold start,
+  # reducing subsequent cold starts from ~8s to ~1s.
+  GetTasksFunctionVersion:
     Type: AWS::Lambda::Version
     Properties:
-      FunctionName: !Ref TaskManagerFunction
-      Description: !Sub "SnapStart version - ${Environment}"
+      FunctionName: !Ref GetTasksFunction
+      Description: !Sub "SnapStart - ${Environment}"
 
-  # ── 3. Lambda Authorizer Function (Phase 2) ──────────────────
-  # Separate lightweight Lambda — validates JWT + checks blocklist
-  # Invoked by API Gateway BEFORE TaskManagerFunction on every request
-  # Result cached 300s (5 min) per token — minimal cold start impact
+  GetTaskFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref GetTaskFunction
+      Description: !Sub "SnapStart - ${Environment}"
+
+  CreateTaskFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref CreateTaskFunction
+      Description: !Sub "SnapStart - ${Environment}"
+
+  UpdateTaskFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref UpdateTaskFunction
+      Description: !Sub "SnapStart - ${Environment}"
+
+  DeleteTaskFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref DeleteTaskFunction
+      Description: !Sub "SnapStart - ${Environment}"
+
+  LogoutFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref LogoutFunction
+      Description: !Sub "SnapStart - ${Environment}"
+
+  # ── 7. Lambda Authorizer ─────────────────────────────────────
   AuthorizerFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub task-manager-authorizer-${Environment}
       Handler: com.taskmanager.task_manager_api.authorizer.AuthorizerHandler::handleRequest
       CodeUri: target/task-manager-1.0.0.jar
-      Description: Lambda Authorizer — validates JWT and checks token blocklist
-      MemorySize: 256                                     # Smaller — no Spring Boot context
-      Timeout: 10                                         # Auth should be fast
+      Description: Lambda Authorizer — validates JWT + checks token blocklist
+      MemorySize: 256
+      Timeout: 10
       Environment:
         Variables:
           BLOCKLIST_TABLE_NAME: !Ref TokenBlocklistTable
@@ -134,7 +243,7 @@ Resources:
         - DynamoDBReadPolicy:
             TableName: !Ref TokenBlocklistTable
 
-  # ── 3. API Gateway ──────────────────────────────────────────
+  # ── 8. API Gateway ───────────────────────────────────────────
   TaskManagerApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -148,14 +257,8 @@ Resources:
           ThrottlingRateLimit: 100
           LoggingLevel: INFO
           MetricsEnabled: true
-      # ── Caching DISABLED — costs ~$13-14/month ──────────────
-      # CacheClusterEnabled: true
-      # CacheClusterSize: "0.5"
       Auth:
         Authorizers:
-          # Phase 2: Lambda Authorizer replaces Cognito Authorizer
-          # Validates JWT signature + expiry + token blocklist
-          # More powerful than Cognito Authorizer — supports revocation
           LambdaAuthorizer:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
             FunctionPayloadType: TOKEN
@@ -164,8 +267,7 @@ Resources:
               Header: Authorization
         DefaultAuthorizer: LambdaAuthorizer
 
-  # ── 4. API Gateway permission to invoke Lambda Authorizer ────
-  # Without this, API Gateway can't call the AuthorizerFunction
+  # ── 9. API Gateway permission to invoke Authorizer ───────────
   AuthorizerInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -174,7 +276,7 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskManagerApi}/*
 
-  # ── 5. Cognito User Pool ────────────────────────────────────
+  # ── 10. Cognito User Pool ────────────────────────────────────
   TaskManagerUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -184,7 +286,7 @@ Resources:
       UsernameAttributes:
         - email
       AdminCreateUserConfig:
-        AllowAdminCreateUserOnly: true                    # Gap 4 — no self-registration
+        AllowAdminCreateUserOnly: true
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -193,7 +295,7 @@ Resources:
           RequireNumbers: true
           RequireSymbols: false
 
-  # ── 6. Cognito App Client ───────────────────────────────────
+  # ── 11. Cognito App Client ───────────────────────────────────
   TaskManagerUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
@@ -204,39 +306,7 @@ Resources:
         - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
 
-  # ── 7. API Gateway Usage Plan + Key ─────────────────────────
-  TaskManagerUsagePlan:
-    Type: AWS::ApiGateway::UsagePlan
-    DependsOn:
-      - TaskManagerApiStage
-    Properties:
-      UsagePlanName: !Sub task-manager-usage-plan-${Environment}
-      ApiStages:
-        - ApiId: !Ref TaskManagerApi
-          Stage: !Ref Environment
-      Throttle:
-        BurstLimit: 20
-        RateLimit: 50
-      Quota:
-        Limit: 10000
-        Period: MONTH
-
-  TaskManagerApiKey:
-    Type: AWS::ApiGateway::ApiKey
-    DependsOn:
-      - TaskManagerApiStage
-    Properties:
-      Name: !Sub task-manager-key-${Environment}
-      Enabled: true
-
-  TaskManagerUsagePlanKey:
-    Type: AWS::ApiGateway::UsagePlanKey
-    Properties:
-      KeyId: !Ref TaskManagerApiKey
-      KeyType: API_KEY
-      UsagePlanId: !Ref TaskManagerUsagePlan
-
-  # ── 8. Tasks DynamoDB Table ──────────────────────────────────
+  # ── 12. Tasks DynamoDB Table ─────────────────────────────────
   TaskTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -270,10 +340,7 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # ── 9. Token Blocklist DynamoDB Table (Phase 2) ──────────────
-  # Stores revoked JWT tokens until they naturally expire.
-  # TTL auto-deletes entries — no manual cleanup needed.
-  # Key insight: we store jti (short UUID) not the full 800-char token.
+  # ── 13. Token Blocklist Table ────────────────────────────────
   TokenBlocklistTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -282,16 +349,16 @@ Resources:
       TableName: !Sub token-blocklist-${Environment}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: tokenId                          # JWT 'jti' claim
+        - AttributeName: tokenId
           AttributeType: S
       KeySchema:
         - AttributeName: tokenId
           KeyType: HASH
       TimeToLiveSpecification:
-        AttributeName: ttl                                # DynamoDB auto-deletes after this epoch
-        Enabled: true                                     # token-blocklist entries auto-expire
+        AttributeName: ttl
+        Enabled: true
 
-  # ── 10. CloudWatch Dashboard ─────────────────────────────────
+  # ── 14. CloudWatch Dashboard ─────────────────────────────────
   TaskManagerDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -303,11 +370,13 @@ Resources:
               "type": "metric",
               "x": 0, "y": 0, "width": 12, "height": 6,
               "properties": {
-                "title": "Lambda Invocations & Errors",
+                "title": "Lambda Invocations per endpoint",
                 "metrics": [
-                  ["AWS/Lambda", "Invocations", "FunctionName", "${TaskManagerFunction}", {"stat": "Sum"}],
-                  ["AWS/Lambda", "Errors", "FunctionName", "${TaskManagerFunction}", {"stat": "Sum"}],
-                  ["AWS/Lambda", "Invocations", "FunctionName", "${AuthorizerFunction}", {"stat": "Sum", "label": "Authorizer Invocations"}]
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${GetTasksFunction}", {"stat": "Sum", "label": "GET /tasks"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${GetTaskFunction}", {"stat": "Sum", "label": "GET /tasks/{id}"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${CreateTaskFunction}", {"stat": "Sum", "label": "POST /tasks"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${UpdateTaskFunction}", {"stat": "Sum", "label": "PUT /tasks/{id}"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${DeleteTaskFunction}", {"stat": "Sum", "label": "DELETE /tasks/{id}"}]
                 ],
                 "period": 300,
                 "region": "${AWS::Region}"
@@ -317,11 +386,12 @@ Resources:
               "type": "metric",
               "x": 12, "y": 0, "width": 12, "height": 6,
               "properties": {
-                "title": "Lambda Duration (p50 / p95 / p99)",
+                "title": "Lambda Duration p95 per endpoint",
                 "metrics": [
-                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p50", "label": "p50"}],
-                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p95", "label": "p95"}],
-                  ["AWS/Lambda", "Duration", "FunctionName", "${TaskManagerFunction}", {"stat": "p99", "label": "p99"}]
+                  ["AWS/Lambda", "Duration", "FunctionName", "${GetTasksFunction}", {"stat": "p95", "label": "GET /tasks p95"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${CreateTaskFunction}", {"stat": "p95", "label": "POST /tasks p95"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${UpdateTaskFunction}", {"stat": "p95", "label": "PUT /tasks/{id} p95"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${DeleteTaskFunction}", {"stat": "p95", "label": "DELETE /tasks/{id} p95"}]
                 ],
                 "period": 300,
                 "region": "${AWS::Region}"
@@ -331,11 +401,12 @@ Resources:
               "type": "metric",
               "x": 0, "y": 6, "width": 12, "height": 6,
               "properties": {
-                "title": "API Gateway Requests & 4XX/5XX Errors",
+                "title": "Lambda Errors per endpoint",
                 "metrics": [
-                  ["AWS/ApiGateway", "Count", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}],
-                  ["AWS/ApiGateway", "4XXError", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}],
-                  ["AWS/ApiGateway", "5XXError", "ApiName", "${TaskManagerApi}", {"stat": "Sum"}]
+                  ["AWS/Lambda", "Errors", "FunctionName", "${GetTasksFunction}", {"stat": "Sum", "label": "GET /tasks errors"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${CreateTaskFunction}", {"stat": "Sum", "label": "POST /tasks errors"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${UpdateTaskFunction}", {"stat": "Sum", "label": "PUT /tasks/{id} errors"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${DeleteTaskFunction}", {"stat": "Sum", "label": "DELETE /tasks/{id} errors"}]
                 ],
                 "period": 300,
                 "region": "${AWS::Region}"
@@ -345,7 +416,7 @@ Resources:
               "type": "metric",
               "x": 12, "y": 6, "width": 12, "height": 6,
               "properties": {
-                "title": "DynamoDB Read/Write Capacity Consumed",
+                "title": "DynamoDB Consumed Capacity",
                 "metrics": [
                   ["AWS/DynamoDB", "ConsumedReadCapacityUnits", "TableName", "${TaskTable}", {"stat": "Sum"}],
                   ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "${TaskTable}", {"stat": "Sum"}],
@@ -358,7 +429,7 @@ Resources:
           ]
         }
 
-  # ── 11. CloudWatch Alarm + SNS ───────────────────────────────
+  # ── 15. CloudWatch Alarm ─────────────────────────────────────
   TaskManagerAlarmTopic:
     Type: AWS::SNS::Topic
     Properties:
@@ -368,12 +439,9 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub task-manager-error-rate-${Environment}
-      AlarmDescription: Triggers when Lambda error count exceeds 5 in a 5-minute window
+      AlarmDescription: Fires when any Lambda error count exceeds 5 in 5 minutes
       Namespace: AWS/Lambda
       MetricName: Errors
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref TaskManagerFunction
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -382,20 +450,48 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref TaskManagerAlarmTopic
-      OKActions:
-        - !Ref TaskManagerAlarmTopic
 
-  # ── 12. CloudWatch Log Groups ────────────────────────────────
-  TaskManagerLogGroup:
+  # ── 16. CloudWatch Log Groups ────────────────────────────────
+  GetTasksLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/task-manager-${Environment}
+      LogGroupName: !Sub /aws/lambda/task-manager-get-tasks-${Environment}
+      RetentionInDays: 14
+
+  GetTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-get-task-${Environment}
+      RetentionInDays: 14
+
+  CreateTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-create-task-${Environment}
+      RetentionInDays: 14
+
+  UpdateTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-update-task-${Environment}
+      RetentionInDays: 14
+
+  DeleteTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-delete-task-${Environment}
       RetentionInDays: 14
 
   AuthorizerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/task-manager-authorizer-${Environment}
+      RetentionInDays: 14
+
+  LogoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/task-manager-logout-${Environment}
       RetentionInDays: 14
 
 # ─────────────────────────────────────────────────────────────
@@ -405,14 +501,6 @@ Outputs:
   ApiUrl:
     Description: Live API Gateway URL
     Value: !Sub https://${TaskManagerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
-
-  LambdaFunctionArn:
-    Description: Main Lambda function ARN
-    Value: !GetAtt TaskManagerFunction.Arn
-
-  AuthorizerFunctionArn:
-    Description: Lambda Authorizer function ARN
-    Value: !GetAtt AuthorizerFunction.Arn
 
   DynamoDBTableName:
     Description: Tasks DynamoDB table name
@@ -429,10 +517,6 @@ Outputs:
   CognitoUserPoolClientId:
     Description: Cognito App Client ID
     Value: !Ref TaskManagerUserPoolClient
-
-  ApiKeyId:
-    Description: API Key ID
-    Value: !Ref TaskManagerApiKey
 
   DashboardUrl:
     Description: CloudWatch Dashboard URL
