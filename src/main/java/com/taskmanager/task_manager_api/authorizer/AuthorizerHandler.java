@@ -29,7 +29,18 @@ public class AuthorizerHandler
         implements RequestHandler<APIGatewayCustomAuthorizerEvent, IamPolicyResponse> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final DynamoDbClient DYNAMO = DynamoDbClient.builder().build();
+
+    // Lazy initialization — DynamoDB client only created on first request
+    // Prevents NoClassDefFoundError in unit tests (no AWS credentials needed)
+    private static DynamoDbClient dynamo;
+
+    @SuppressWarnings("unused")
+    private static synchronized DynamoDbClient getDynamo() {
+        if (dynamo == null) {
+            dynamo = DynamoDbClient.builder().build();
+        }
+        return dynamo;
+    }
 
     private static final String BLOCKLIST_TABLE = System.getenv("BLOCKLIST_TABLE_NAME");
     @SuppressWarnings("unused")
@@ -109,7 +120,7 @@ public class AuthorizerHandler
                 log.warn("BLOCKLIST_TABLE_NAME not set — skipping blocklist check");
                 return false;
             }
-            GetItemResponse response = DYNAMO.getItem(GetItemRequest.builder()
+            GetItemResponse response = getDynamo().getItem(GetItemRequest.builder()
                     .tableName(BLOCKLIST_TABLE)
                     .key(Map.of("tokenId",
                             AttributeValue.builder().s(jti).build()))
