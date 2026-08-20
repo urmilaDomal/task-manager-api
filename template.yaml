@@ -263,7 +263,7 @@ Resources:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
             FunctionPayloadType: TOKEN
             Identity:
-              ReauthorizeEvery: 300
+              ReauthorizeEvery: 60
               Header: Authorization
         DefaultAuthorizer: LambdaAuthorizer
 

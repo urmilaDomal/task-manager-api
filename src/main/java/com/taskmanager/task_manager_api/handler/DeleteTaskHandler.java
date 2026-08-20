@@ -8,6 +8,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 import com.amazonaws.xray.AWSXRay;
 import com.amazonaws.xray.AWSXRayRecorderBuilder;
+import com.amazonaws.xray.strategy.sampling.DefaultSamplingStrategy;
 import com.amazonaws.xray.strategy.sampling.NoSamplingStrategy;
 import com.taskmanager.task_manager_api.TaskManagerApiApplication;
 import org.slf4j.MDC;
@@ -26,7 +27,7 @@ public class DeleteTaskHandler implements RequestStreamHandler {
         AWSXRay.setGlobalRecorder(
                 AWSXRayRecorderBuilder.standard()
                         .withDefaultPlugins()
-                        .withSamplingStrategy(new NoSamplingStrategy())
+                        .withSamplingStrategy(new DefaultSamplingStrategy())
                         .build());
     }
 
