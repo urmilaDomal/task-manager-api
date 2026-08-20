@@ -4,10 +4,6 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayCustomAuthorizerEvent;
 import com.amazonaws.services.lambda.runtime.events.IamPolicyResponse;
-import com.amazonaws.xray.AWSXRay;
-import com.amazonaws.xray.AWSXRayRecorderBuilder;
-import com.amazonaws.xray.entities.Subsegment;
-import com.amazonaws.xray.strategy.sampling.NoSamplingStrategy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -21,33 +17,34 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AWS Lambda Authorizer — validates JWT tokens at API Gateway level.
+ * AWS Lambda Authorizer — TOKEN type.
+ * Validates JWT expiry + checks token blocklist.
  *
- * TOKEN type — receives token via event.getAuthorizationToken()
- * Result cached 300 seconds per token by API Gateway.
- *
- * Phase 3 addition: X-Ray subsegments for blocklist check timing.
+ * Phase 3 X-Ray removed from Authorizer — causes SegmentNotFoundException
+ * under concurrent load when multiple requests hit simultaneously.
+ * X-Ray tracing still active on main Lambda functions.
  */
 @Slf4j
 public class AuthorizerHandler
         implements RequestHandler<APIGatewayCustomAuthorizerEvent, IamPolicyResponse> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final DynamoDbClient DYNAMO = DynamoDbClient.builder().build();
+
+    // Lazy initialization — DynamoDB client only created on first request
+    // Prevents NoClassDefFoundError in unit tests (no AWS credentials needed)
+    private static DynamoDbClient dynamo;
+
+    @SuppressWarnings("unused")
+    private static synchronized DynamoDbClient getDynamo() {
+        if (dynamo == null) {
+            dynamo = DynamoDbClient.builder().build();
+        }
+        return dynamo;
+    }
 
     private static final String BLOCKLIST_TABLE = System.getenv("BLOCKLIST_TABLE_NAME");
+    @SuppressWarnings("unused")
     private static final String USER_POOL_ID    = System.getenv("COGNITO_USER_POOL_ID");
-    private static final String REGION          = System.getenv("AWS_REGION");
-
-    static {
-        // Configure X-Ray for Authorizer Lambda
-        AWSXRay.setGlobalRecorder(
-                AWSXRayRecorderBuilder.standard()
-                        .withDefaultPlugins()
-                        .withSamplingStrategy(new NoSamplingStrategy())
-                        .build()
-        );
-    }
 
     @Override
     public IamPolicyResponse handleRequest(
@@ -57,7 +54,7 @@ public class AuthorizerHandler
         String token = event.getAuthorizationToken();
         String methodArn = event.getMethodArn();
 
-        log.info("Authorizer invoked for methodArn={} tokenPresent={}",
+        log.info("Authorizer invoked methodArn={} tokenPresent={}",
                 methodArn, token != null);
 
         try {
@@ -70,41 +67,43 @@ public class AuthorizerHandler
             // ── Step 2: Decode JWT payload ─────────────────────
             String[] parts = token.split("\\.");
             if (parts.length != 3) {
-                log.warn("Invalid JWT format");
+                log.warn("Invalid JWT format — expected 3 parts");
                 return denyPolicy("anonymous", methodArn);
             }
 
-            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            // Add padding if needed for Base64 decoding
+            String payloadBase64 = parts[1];
+            int padding = 4 - payloadBase64.length() % 4;
+            if (padding != 4) {
+                payloadBase64 = payloadBase64 + "=".repeat(padding);
+            }
+
+            String payload = new String(Base64.getUrlDecoder().decode(payloadBase64));
             JsonNode claims = MAPPER.readTree(payload);
 
             // ── Step 3: Check expiry ───────────────────────────
+            if (!claims.has("exp")) {
+                log.warn("Token missing exp claim");
+                return denyPolicy("invalid", methodArn);
+            }
+
             long exp = claims.get("exp").asLong();
             long now = System.currentTimeMillis() / 1000;
             if (now > exp) {
-                log.warn("Token expired at={} now={}", exp, now);
+                log.warn("Token expired exp={} now={}", exp, now);
                 return denyPolicy("expired", methodArn);
             }
 
-            // ── Step 4: Check blocklist (with X-Ray subsegment) ─
+            // ── Step 4: Check blocklist ────────────────────────
             String jti = claims.has("jti") ? claims.get("jti").asText() : null;
-            if (jti != null) {
-                Subsegment blocklistCheck = AWSXRay.beginSubsegment("blocklist-check");
-                try {
-                    blocklistCheck.putMetadata("jti", jti);
-                    if (isBlocklisted(jti)) {
-                        log.warn("Token is blocklisted jti={}", jti);
-                        blocklistCheck.putMetadata("result", "BLOCKED");
-                        return denyPolicy("blocklisted", methodArn);
-                    }
-                    blocklistCheck.putMetadata("result", "ALLOWED");
-                } finally {
-                    AWSXRay.endSubsegment();
-                }
+            if (jti != null && isBlocklisted(jti)) {
+                log.warn("Token blocklisted jti={}", jti);
+                return denyPolicy("blocklisted", methodArn);
             }
 
             // ── Step 5: Allow ──────────────────────────────────
-            String userId = claims.get("sub").asText();
-            log.info("Token valid for userId={}", userId);
+            String userId = claims.has("sub") ? claims.get("sub").asText() : "unknown";
+            log.info("ALLOW userId={}", userId);
             return allowPolicy(userId, methodArn);
 
         } catch (Exception e) {
@@ -117,13 +116,19 @@ public class AuthorizerHandler
 
     private boolean isBlocklisted(String jti) {
         try {
-            GetItemResponse response = DYNAMO.getItem(GetItemRequest.builder()
+            if (BLOCKLIST_TABLE == null || BLOCKLIST_TABLE.isEmpty()) {
+                log.warn("BLOCKLIST_TABLE_NAME not set — skipping blocklist check");
+                return false;
+            }
+            GetItemResponse response = getDynamo().getItem(GetItemRequest.builder()
                     .tableName(BLOCKLIST_TABLE)
                     .key(Map.of("tokenId",
                             AttributeValue.builder().s(jti).build()))
                     .build());
             return response.hasItem() && !response.item().isEmpty();
         } catch (Exception e) {
+            // Fail open — allow request if blocklist check fails
+            // Prevents DynamoDB outage from blocking all users
             log.error("Blocklist check failed — failing open: {}", e.getMessage());
             return false;
         }
@@ -132,7 +137,12 @@ public class AuthorizerHandler
     // ── IAM Policy builders ───────────────────────────────────
 
     private IamPolicyResponse allowPolicy(String principalId, String methodArn) {
-        log.info("ALLOW for principalId={}", principalId);
+        // Allow all methods on this API — not just the specific method
+        // This prevents issues when Authorizer result is cached
+        // and used for different endpoints
+        String arnPrefix = methodArn.substring(0,
+                methodArn.lastIndexOf('/') + 1) + "*";
+
         return IamPolicyResponse.builder()
                 .withPrincipalId(principalId)
                 .withPolicyDocument(IamPolicyResponse.PolicyDocument.builder()
@@ -141,7 +151,7 @@ public class AuthorizerHandler
                                 IamPolicyResponse.Statement.builder()
                                         .withEffect("Allow")
                                         .withAction("execute-api:Invoke")
-                                        .withResource(List.of(methodArn))
+                                        .withResource(List.of(arnPrefix))
                                         .build()))
                         .build())
                 .withContext(Map.of("userId", principalId))
@@ -149,7 +159,7 @@ public class AuthorizerHandler
     }
 
     private IamPolicyResponse denyPolicy(String principalId, String methodArn) {
-        log.warn("DENY for principalId={}", principalId);
+        log.warn("DENY principalId={}", principalId);
         return IamPolicyResponse.builder()
                 .withPrincipalId(principalId)
                 .withPolicyDocument(IamPolicyResponse.PolicyDocument.builder()

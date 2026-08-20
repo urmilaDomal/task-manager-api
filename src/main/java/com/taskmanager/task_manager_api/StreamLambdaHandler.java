@@ -8,6 +8,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 import com.amazonaws.xray.AWSXRay;
 import com.amazonaws.xray.AWSXRayRecorderBuilder;
+import com.amazonaws.xray.strategy.sampling.DefaultSamplingStrategy;
 import com.amazonaws.xray.strategy.sampling.NoSamplingStrategy;
 
 import java.io.IOException;
@@ -46,7 +47,7 @@ public class StreamLambdaHandler implements RequestStreamHandler {
                 AWSXRayRecorderBuilder.standard()                                           
                         .withDefaultPlugins()             // auto-detects Lambda environment
                         .withSamplingStrategy(                                             
-                                new NoSamplingStrategy())  // trace 100% of requests in dev
+                                new DefaultSamplingStrategy())  
                         .build()
         );
     }
